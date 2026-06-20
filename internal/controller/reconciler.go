@@ -91,6 +91,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, obj *unstructured.Unstructur
 	pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		pod, err = pods.Create(ctx, api.PodFor(obj, spec), metav1.CreateOptions{})
+	} else if err == nil && pod.Annotations[api.ConfigHashAnno] != api.SpecHash(spec) {
+		if err := pods.Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
+			return err
+		}
+		return r.updatePhase(ctx, obj, "Updating")
 	}
 	if err != nil {
 		return err

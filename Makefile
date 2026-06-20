@@ -19,6 +19,7 @@ test-unit:
 
 test-e2e: build
 	bash test/e2e/lifecycle.sh
+	bash test/e2e/compose.sh
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -type f)

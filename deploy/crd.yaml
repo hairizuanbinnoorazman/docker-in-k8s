@@ -61,6 +61,39 @@ spec:
                 tty:
                   type: boolean
                   default: false
+                env:
+                  type: array
+                  x-kubernetes-preserve-unknown-fields: true
+                  items:
+                    type: object
+                workingDir:
+                  type: string
+                ports:
+                  type: array
+                  x-kubernetes-preserve-unknown-fields: true
+                  items:
+                    type: object
+                mounts:
+                  type: array
+                  x-kubernetes-preserve-unknown-fields: true
+                  items:
+                    type: object
+                resources:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                readiness:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                liveness:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                startup:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

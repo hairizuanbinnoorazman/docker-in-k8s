@@ -103,3 +103,40 @@ func TestReconcileFinalizerDeletesPod(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReconcileReplacesPodWhenConfigurationChanges(t *testing.T) {
+	obj := api.NewContainer("web", "workloads", api.ContainerSpec{Image: "example.test/web:2", DesiredState: "Running"})
+	obj.SetUID(types.UID("container-uid"))
+	obj.SetFinalizers([]string{api.Finalizer})
+	oldSpec := api.ContainerSpec{Image: "example.test/web:1", DesiredState: "Running"}
+	pod := api.PodFor(obj, oldSpec)
+
+	scheme := runtime.NewScheme()
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme, obj)
+	coreClient := kubernetesfake.NewSimpleClientset(pod)
+	reconciler := New(dynamicClient, coreClient, "workloads")
+
+	if err := reconciler.Reconcile(context.Background(), obj); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coreClient.CoreV1().Pods("workloads").Get(context.Background(), pod.Name, metav1.GetOptions{}); err == nil {
+		t.Fatal("stale Pod was not deleted")
+	}
+	updated, err := dynamicClient.Resource(api.GVR).Namespace("workloads").Get(context.Background(), "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.Status(updated).Phase != "Updating" {
+		t.Fatalf("phase = %q", api.Status(updated).Phase)
+	}
+	if err := reconciler.Reconcile(context.Background(), updated); err != nil {
+		t.Fatal(err)
+	}
+	created, err := coreClient.CoreV1().Pods("workloads").Get(context.Background(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Spec.Containers[0].Image != "example.test/web:2" {
+		t.Fatalf("image = %q", created.Spec.Containers[0].Image)
+	}
+}

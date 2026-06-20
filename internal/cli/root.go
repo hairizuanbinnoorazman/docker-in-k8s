@@ -39,6 +39,9 @@ func NewRootCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Annotations["dockube.local"] == "true" {
+				return nil
+			}
 			if opts.namespace == "" {
 				return fmt.Errorf("namespace is required; set --namespace or DOCKUBE_NAMESPACE")
 			}
@@ -68,6 +71,7 @@ func NewRootCommand() *cobra.Command {
 		newStateCommand(opts, "start", "Running"),
 		newRestartCommand(opts),
 		newExecCommand(opts),
+		newComposeCommand(opts),
 	)
 	return cmd
 }

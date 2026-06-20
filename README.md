@@ -95,7 +95,11 @@ is not implemented.
 | `docker inspect` | Not available | Kubernetes resources can be inspected with `kubectl` in the meantime. |
 | `docker attach` | Not available | Only `exec` currently supports interactive streaming. |
 | `docker kill`, `wait`, `port`, `cp`, `top`, `stats`, `events` | Not available | Not implemented. |
-| `docker compose ...` | Not available | Compose parsing and reconciliation are planned but not implemented. |
+| `docker compose config` | Available | Uses compose-go/v2 to merge, interpolate, normalize, and validate the complete project without cluster access. |
+| `docker compose up -d` | Partial | Idempotently creates one logical workload and ClusterIP Service per service, plus ConfigMaps and PVCs. Replicas are limited to one. |
+| `docker compose ps`, `logs` | Available | Lists project workloads and reads current Pod logs. `logs -f` is best used with one service. |
+| `docker compose stop`, `start`, `restart` | Available | Operates on every service in the project. Replacement Pods receive new UIDs and IPs. |
+| `docker compose down` | Available | Removes workloads, Services, and generated ConfigMaps. PVCs are retained unless `--volumes` is supplied. |
 | `docker build` / BuildKit | Not available | Image builds are outside the current implementation. |
 | Docker Engine API and socket clients | Not available | There is intentionally no Docker socket or Docker Engine API compatibility. |
 | Host bind mounts, privileged mode, host namespaces, and devices | Not available | Intentionally excluded from the security model. |
@@ -108,3 +112,33 @@ validated, so compatibility with them should not be assumed.
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for architecture,
 compatibility boundaries, security constraints, and the remaining task list.
+
+## Compose compatibility
+
+`dockube compose` uses `github.com/compose-spec/compose-go/v2` and validates the
+whole normalized project before creating or updating Kubernetes resources.
+Project names, ownership labels, workload names, Services, ConfigMaps, and PVCs
+are deterministic. Repeated `compose up -d` calls update existing resources and
+remove stale project workloads without creating duplicates.
+
+| Compose field | Support | Kubernetes mapping or restriction |
+| --- | --- | --- |
+| `image` | Supported | Required; image builds are not performed. |
+| `entrypoint`, `command` | Supported | Container command and arguments. |
+| `environment`, `env_file` | Supported | Resolved by compose-go before apply; values are stored in the workload spec. |
+| `working_dir`, `stdin_open`, `tty` | Supported | Container fields. |
+| `expose`, `ports` | Partial | ClusterIP Service ports only. Published ports become Service ports; no host binding or public LoadBalancer is created. |
+| `deploy.resources` CPU/memory requests and limits | Supported | Kubernetes resource requests and limits. |
+| `healthcheck` with `CMD` or `CMD-SHELL` | Supported | Readiness and liveness exec probes; `start_period` also creates a startup probe. |
+| Named volumes | Supported | 1 GiB `ReadWriteOnce` PVCs by default. External volumes reference existing PVCs. PVCs survive `down`; `down --volumes` deletes managed PVCs. |
+| `configs` from `file`, `content`, or `environment` | Supported | Generated ConfigMaps mounted at the requested target. |
+| External `secrets` | Supported | References an existing Kubernetes Secret. The secret must contain a key matching the Compose secret source name. Secret data is never copied into a dockube object or status. |
+| `depends_on: service_started` | Partial | Dependency validity is checked, but Kubernetes scheduling remains concurrent; applications must retry DNS/connections. |
+| Default network | Partial | Every service gets a Kubernetes Service and service-name DNS. Custom network semantics and aliases are not implemented. |
+| Replicas | Partial | Exactly one replica per service. |
+| `build`, host/anonymous/tmpfs mounts, `privileged`, devices, host networking/PID/IPC/UTS, capabilities, sysctls, custom logging, custom DNS, and other non-listed service fields | Rejected | Validation fails before cluster mutation; there is no silent degradation. |
+
+The identity running the Compose CLI additionally needs namespace-scoped access
+to `services`, `configmaps`, and `persistentvolumeclaims`, and `get` access to
+referenced `secrets`. The controller itself does not need Secret access: Pods
+reference Secrets directly and kubelet performs the mount.

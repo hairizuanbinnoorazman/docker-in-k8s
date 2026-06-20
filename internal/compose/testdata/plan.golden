@@ -1,0 +1,92 @@
+{
+  "Name": "golden",
+  "Container": "golden-web",
+  "Image": "busybox:1.36",
+  "Command": [
+    "sh",
+    "-c"
+  ],
+  "Args": [
+    "sleep 300"
+  ],
+  "Env": [
+    {
+      "name": "MESSAGE",
+      "value": "hello"
+    }
+  ],
+  "WorkingDir": "/tmp",
+  "Mounts": [
+    {
+      "Name": "volume-0",
+      "Type": "pvc",
+      "Source": "golden-data",
+      "Target": "/data",
+      "ReadOnly": false,
+      "SubPath": "",
+      "Items": null,
+      "ContentHash": ""
+    },
+    {
+      "Name": "config-0",
+      "Type": "configMap",
+      "Source": "golden-config-message",
+      "Target": "/etc/message",
+      "ReadOnly": true,
+      "SubPath": "content",
+      "Items": {
+        "content": "content"
+      },
+      "ContentHash": "2568557c5c104bc1"
+    },
+    {
+      "Name": "secret-0",
+      "Type": "secret",
+      "Source": "existing-token",
+      "Target": "/run/secrets/token",
+      "ReadOnly": true,
+      "SubPath": "api_token",
+      "Items": {
+        "api_token": "api_token"
+      },
+      "ContentHash": ""
+    }
+  ],
+  "Service": {
+    "metadata": {
+      "name": "web",
+      "namespace": "workloads",
+      "labels": {
+        "app.kubernetes.io/managed-by": "dockube",
+        "dockube.io/compose-project": "golden",
+        "dockube.io/compose-service": "web"
+      }
+    },
+    "spec": {
+      "ports": [
+        {
+          "name": "p8080-tcp",
+          "protocol": "TCP",
+          "port": 8080,
+          "targetPort": 8080
+        }
+      ],
+      "selector": {
+        "dockube.io/container-name": "golden-web"
+      }
+    },
+    "status": {
+      "loadBalancer": {}
+    }
+  },
+  "Volumes": [
+    {
+      "Name": "data",
+      "ClaimName": "golden-data",
+      "External": false
+    }
+  ],
+  "Secrets": [
+    "existing-token"
+  ]
+}

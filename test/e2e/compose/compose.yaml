@@ -1,0 +1,57 @@
+name: compose-e2e
+services:
+  web:
+    image: busybox:1.36
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        count=0
+        test ! -f /data/count || count=$$(cat /data/count)
+        count=$$((count + 1))
+        echo "$$count" > /data/count
+        mkdir -p /tmp/www
+        printf '%s|%s|%s|%s\n' "$$MESSAGE" "$$(cat /etc/dockube-message)" "$$(cat /run/secrets/token)" "$$count" > /tmp/www/index.html
+        exec httpd -f -p 8080 -h /tmp/www
+    environment:
+      MESSAGE: version-one
+    expose: ["8080"]
+    volumes:
+      - data:/data
+    configs:
+      - source: message
+        target: /etc/dockube-message
+    secrets:
+      - source: api_token
+        target: /run/secrets/token
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+    deploy:
+      resources:
+        reservations:
+          cpus: "0.01"
+          memory: 8M
+        limits:
+          cpus: "0.25"
+          memory: 64M
+  client:
+    image: busybox:1.36
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until wget -q -O - http://web:8080; do sleep 1; done
+        sleep 300
+    depends_on:
+      web:
+        condition: service_started
+volumes:
+  data: {}
+configs:
+  message:
+    content: config-value
+secrets:
+  api_token:
+    external: true
+    name: compose-e2e-token
