@@ -44,6 +44,7 @@ test "$(kubectl get dockercontainer "$name" -n "$namespace" -o jsonpath='{.statu
 "$binary" --namespace "$namespace" ps | grep -q "$name"
 "$binary" --namespace "$namespace" ps -a | grep -q "$name"
 "$binary" --namespace "$namespace" logs "$name" | grep -q "dockube-e2e"
+"$binary" --namespace "$namespace" exec "$name" sh -c 'echo exec-e2e' | grep -q "exec-e2e"
 
 test "$(kubectl get pod -l "dockube.io/container-name=$name" -n "$namespace" -o jsonpath='{.items[0].spec.automountServiceAccountToken}')" = "false"
 test "$(kubectl get pod -l "dockube.io/container-name=$name" -n "$namespace" -o jsonpath='{.items[0].spec.securityContext.runAsNonRoot}')" = "true"
@@ -51,6 +52,10 @@ test "$(kubectl get pod -l "dockube.io/container-name=$name" -n "$namespace" -o 
 
 "$binary" --namespace "$namespace" stop "$name" | grep -q "$name"
 "$binary" --namespace "$namespace" ps -a | grep "$name" | grep -q "Stopped"
+if "$binary" --namespace "$namespace" exec "$name" true 2>/dev/null; then
+  echo "exec unexpectedly succeeded for a stopped container" >&2
+  exit 1
+fi
 
 "$binary" --namespace "$namespace" start "$name" | grep -q "$name"
 kubectl wait --for=condition=Ready pod -l "dockube.io/container-name=$name" -n "$namespace" --timeout=120s

@@ -9,6 +9,7 @@ Current implementation slice:
 - `dockube run -d --name NAME IMAGE [COMMAND] [ARG...]`
 - `dockube ps [-a]`
 - `dockube logs [-f] [--tail N] CONTAINER`
+- `dockube exec [-i] [-t] CONTAINER COMMAND [ARG...]`
 - `dockube stop|start|restart CONTAINER`
 - `dockube rm CONTAINER`
 

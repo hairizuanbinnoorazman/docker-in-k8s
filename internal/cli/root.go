@@ -17,6 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	clientscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 type options struct {
@@ -25,6 +28,7 @@ type options struct {
 	errOut    io.Writer
 	client    dynamic.Interface
 	core      kubernetes.Interface
+	config    *rest.Config
 }
 
 func NewRootCommand() *cobra.Command {
@@ -48,6 +52,7 @@ func NewRootCommand() *cobra.Command {
 			}
 			opts.client = clients.Dynamic
 			opts.core = clients.Core
+			opts.config = config
 			return nil
 		},
 	}
@@ -62,8 +67,74 @@ func NewRootCommand() *cobra.Command {
 		newStateCommand(opts, "stop", "Stopped"),
 		newStateCommand(opts, "start", "Running"),
 		newRestartCommand(opts),
+		newExecCommand(opts),
 	)
 	return cmd
+}
+
+func newExecCommand(opts *options) *cobra.Command {
+	var interactive bool
+	var tty bool
+	cmd := &cobra.Command{
+		Use:   "exec [flags] CONTAINER COMMAND [ARG...]",
+		Short: "Run a command in a running container",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := resolveName(cmd.Context(), opts, args[0])
+			if err != nil {
+				return err
+			}
+			obj, err := opts.client.Resource(api.GVR).Namespace(opts.namespace).Get(cmd.Context(), name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			podName, err := runningPodName(obj)
+			if err != nil {
+				return err
+			}
+			request := opts.core.CoreV1().RESTClient().Post().
+				Resource("pods").
+				Name(podName).
+				Namespace(opts.namespace).
+				SubResource("exec").
+				VersionedParams(&corev1.PodExecOptions{
+					Container: "main",
+					Command:   args[1:],
+					Stdin:     interactive,
+					Stdout:    true,
+					Stderr:    !tty,
+					TTY:       tty,
+				}, clientscheme.ParameterCodec)
+			executor, err := remotecommand.NewSPDYExecutor(opts.config, "POST", request.URL())
+			if err != nil {
+				return err
+			}
+			streamOptions := remotecommand.StreamOptions{
+				Stdout: opts.out,
+				Stderr: opts.errOut,
+				Tty:    tty,
+			}
+			if interactive {
+				streamOptions.Stdin = os.Stdin
+			}
+			return executor.StreamWithContext(cmd.Context(), streamOptions)
+		},
+	}
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "keep stdin open")
+	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "allocate a TTY")
+	cmd.Flags().SetInterspersed(false)
+	return cmd
+}
+
+func runningPodName(obj *unstructured.Unstructured) (string, error) {
+	status := api.Status(obj)
+	if status.Phase != "Running" {
+		return "", fmt.Errorf("container %s is not running", obj.GetName())
+	}
+	if status.PodName == "" {
+		return "", fmt.Errorf("container %s has no active Pod", obj.GetName())
+	}
+	return status.PodName, nil
 }
 
 func newLogsCommand(opts *options) *cobra.Command {

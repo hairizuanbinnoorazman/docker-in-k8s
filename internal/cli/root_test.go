@@ -50,6 +50,23 @@ func TestSetDesiredState(t *testing.T) {
 	}
 }
 
+func TestRunningPodName(t *testing.T) {
+	obj := api.NewContainer("test", "workloads", api.ContainerSpec{Image: "busybox"})
+	obj.Object["status"] = map[string]any{"phase": "Running", "currentPodName": "test-pod"}
+	name, err := runningPodName(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "test-pod" {
+		t.Fatalf("pod name = %q", name)
+	}
+
+	obj.Object["status"] = map[string]any{"phase": "Stopped"}
+	if _, err := runningPodName(obj); err == nil {
+		t.Fatal("expected stopped container to be rejected")
+	}
+}
+
 func TestHumanDuration(t *testing.T) {
 	if got := humanDuration(2 * time.Minute); got != "2 minutes ago" {
 		t.Fatalf("humanDuration = %q", got)
