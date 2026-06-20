@@ -28,6 +28,9 @@ func TestPodForUsesRestrictedDefaults(t *testing.T) {
 	if len(container.SecurityContext.Capabilities.Drop) != 1 || container.SecurityContext.Capabilities.Drop[0] != "ALL" {
 		t.Fatal("all capabilities must be dropped")
 	}
+	if pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != 10 {
+		t.Fatal("termination grace period must default to Docker's 10 seconds")
+	}
 }
 
 func TestContainerIDIsStableAndShort(t *testing.T) {

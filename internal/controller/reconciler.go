@@ -75,8 +75,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, obj *unstructured.Unstructur
 	podName := api.PodName(obj.GetName(), string(obj.GetUID()))
 
 	if spec.DesiredState != "Running" {
-		err := pods.Delete(ctx, podName, metav1.DeleteOptions{})
-		if err != nil && !apierrors.IsNotFound(err) {
+		_, err := pods.Get(ctx, podName, metav1.GetOptions{})
+		if err == nil {
+			if err := pods.Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
+				return err
+			}
+			return r.updatePhase(ctx, obj, "Stopping")
+		}
+		if !apierrors.IsNotFound(err) {
 			return err
 		}
 		return r.updateStoppedStatus(ctx, obj)
@@ -90,6 +96,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, obj *unstructured.Unstructur
 		return err
 	}
 	return r.updateStatus(ctx, obj, pod)
+}
+
+func (r *Reconciler) updatePhase(ctx context.Context, obj *unstructured.Unstructured, phase string) error {
+	copy := obj.DeepCopy()
+	copy.Object["status"] = map[string]any{
+		"containerID": api.ContainerID(string(obj.GetUID())),
+		"phase":       phase,
+	}
+	_, err := r.dynamic.Resource(api.GVR).Namespace(obj.GetNamespace()).UpdateStatus(ctx, copy, metav1.UpdateOptions{})
+	return err
 }
 
 func (r *Reconciler) finalize(ctx context.Context, obj *unstructured.Unstructured) error {

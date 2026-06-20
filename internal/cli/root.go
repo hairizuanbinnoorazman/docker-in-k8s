@@ -11,9 +11,12 @@ import (
 	"github.com/hairizuanbinnoorazman/docker-in-k8s/internal/api"
 	"github.com/hairizuanbinnoorazman/docker-in-k8s/internal/kube"
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
 type options struct {
@@ -21,6 +24,7 @@ type options struct {
 	out       io.Writer
 	errOut    io.Writer
 	client    dynamic.Interface
+	core      kubernetes.Interface
 }
 
 func NewRootCommand() *cobra.Command {
@@ -43,14 +47,156 @@ func NewRootCommand() *cobra.Command {
 				return err
 			}
 			opts.client = clients.Dynamic
+			opts.core = clients.Core
 			return nil
 		},
 	}
 	cmd.SetOut(opts.out)
 	cmd.SetErr(opts.errOut)
-	cmd.PersistentFlags().StringVarP(&opts.namespace, "namespace", "n", os.Getenv("DOCKUBE_NAMESPACE"), "Kubernetes workload namespace")
-	cmd.AddCommand(newRunCommand(opts), newPSCommand(opts), newRMCommand(opts))
+	cmd.PersistentFlags().StringVar(&opts.namespace, "namespace", os.Getenv("DOCKUBE_NAMESPACE"), "Kubernetes workload namespace")
+	cmd.AddCommand(
+		newRunCommand(opts),
+		newPSCommand(opts),
+		newRMCommand(opts),
+		newLogsCommand(opts),
+		newStateCommand(opts, "stop", "Stopped"),
+		newStateCommand(opts, "start", "Running"),
+		newRestartCommand(opts),
+	)
 	return cmd
+}
+
+func newLogsCommand(opts *options) *cobra.Command {
+	var follow bool
+	var tail int64
+	cmd := &cobra.Command{
+		Use:   "logs CONTAINER",
+		Short: "Fetch container logs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := resolveName(cmd.Context(), opts, args[0])
+			if err != nil {
+				return err
+			}
+			obj, err := opts.client.Resource(api.GVR).Namespace(opts.namespace).Get(cmd.Context(), name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			status := api.Status(obj)
+			podName := status.PodName
+			if podName == "" {
+				podName = api.PodName(name, string(obj.GetUID()))
+			}
+			logOptions := &corev1.PodLogOptions{Container: "main", Follow: follow}
+			if cmd.Flags().Changed("tail") {
+				logOptions.TailLines = &tail
+			}
+			stream, err := opts.core.CoreV1().Pods(opts.namespace).GetLogs(podName, logOptions).Stream(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer stream.Close()
+			_, err = io.Copy(opts.out, stream)
+			return err
+		},
+	}
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow log output")
+	cmd.Flags().Int64VarP(&tail, "tail", "n", 0, "number of lines to show from the end")
+	return cmd
+}
+
+func newStateCommand(opts *options, commandName, desiredState string) *cobra.Command {
+	return &cobra.Command{
+		Use:   commandName + " CONTAINER [CONTAINER...]",
+		Short: commandName + " logical containers",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, value := range args {
+				name, err := resolveName(cmd.Context(), opts, value)
+				if err != nil {
+					return err
+				}
+				if err := setDesiredState(cmd.Context(), opts.client, opts.namespace, name, desiredState); err != nil {
+					return err
+				}
+				if err := waitForPhase(cmd.Context(), opts, name, desiredState, 60*time.Second); err != nil {
+					return err
+				}
+				fmt.Fprintln(opts.out, name)
+			}
+			return nil
+		},
+	}
+}
+
+func newRestartCommand(opts *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart CONTAINER [CONTAINER...]",
+		Short: "Restart logical containers",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, value := range args {
+				name, err := resolveName(cmd.Context(), opts, value)
+				if err != nil {
+					return err
+				}
+				if err := setDesiredState(cmd.Context(), opts.client, opts.namespace, name, "Stopped"); err != nil {
+					return err
+				}
+				if err := waitForPhase(cmd.Context(), opts, name, "Stopped", 60*time.Second); err != nil {
+					return err
+				}
+				if err := setDesiredState(cmd.Context(), opts.client, opts.namespace, name, "Running"); err != nil {
+					return err
+				}
+				if err := waitForPhase(cmd.Context(), opts, name, "Running", 60*time.Second); err != nil {
+					return err
+				}
+				fmt.Fprintln(opts.out, name)
+			}
+			return nil
+		},
+	}
+}
+
+func setDesiredState(ctx context.Context, client dynamic.Interface, namespace, name, desiredState string) error {
+	resource := client.Resource(api.GVR).Namespace(namespace)
+	for attempt := 0; attempt < 5; attempt++ {
+		obj, err := resource.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if err := unstructured.SetNestedField(obj.Object, desiredState, "spec", "desiredState"); err != nil {
+			return err
+		}
+		if _, err := resource.Update(ctx, obj, metav1.UpdateOptions{}); err == nil {
+			return nil
+		} else if !apierrors.IsConflict(err) {
+			return err
+		}
+	}
+	return fmt.Errorf("could not update %s after conflicts", name)
+}
+
+func waitForPhase(ctx context.Context, opts *options, name, phase string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		obj, err := opts.client.Resource(api.GVR).Namespace(opts.namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if api.Status(obj).Phase == phase {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for %s to become %s: %w", name, phase, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func newRunCommand(opts *options) *cobra.Command {
@@ -90,6 +236,7 @@ func newRunCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "run in background")
 	cmd.Flags().BoolVarP(&stdin, "interactive", "i", false, "keep stdin open")
 	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "allocate a TTY")
+	cmd.Flags().SetInterspersed(false)
 	return cmd
 }
 

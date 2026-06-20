@@ -127,6 +127,7 @@ func PodFor(obj *unstructured.Unstructured, spec ContainerSpec) *corev1.Pod {
 	falseValue := false
 	trueValue := true
 	runAsUser := int64(65532)
+	terminationGracePeriod := int64(10)
 	ownerController := true
 	podName := PodName(obj.GetName(), string(obj.GetUID()))
 
@@ -147,8 +148,9 @@ func PodFor(obj *unstructured.Unstructured, spec ContainerSpec) *corev1.Pod {
 			}},
 		},
 		Spec: corev1.PodSpec{
-			AutomountServiceAccountToken: &falseValue,
-			RestartPolicy:                corev1.RestartPolicyNever,
+			AutomountServiceAccountToken:  &falseValue,
+			RestartPolicy:                 corev1.RestartPolicyNever,
+			TerminationGracePeriodSeconds: &terminationGracePeriod,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot: &trueValue,
 				RunAsUser:    &runAsUser,
