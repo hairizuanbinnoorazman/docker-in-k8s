@@ -1,0 +1,63 @@
+GKE validation evidence (sanitized)
+Date: 2026-06-21
+Kubernetes server: v1.35.5-gke.1000000
+kubectl client: v1.35.5
+
+[1/6] Local unit tests
+?    <module>/cmd/controller       [no test files]
+?    <module>/cmd/dockube          [no test files]
+ok   <module>/internal/api         (cached)
+ok   <module>/internal/cli         (cached)
+ok   <module>/internal/compose     (cached)
+ok   <module>/internal/controller  (cached)
+?    <module>/internal/kube        [no test files]
+RESULT: PASS - go test ./...
+
+[2/6] Static analysis
+RESULT: PASS - go vet ./...
+
+[3/6] Install CRD and GKE controller deployment
+customresourcedefinition.apiextensions.k8s.io/dockercontainers.dockube.io unchanged
+namespace/dockube-system unchanged
+namespace/dockube-workloads unchanged
+serviceaccount/dockube-controller unchanged
+role.rbac.authorization.k8s.io/dockube-controller unchanged
+rolebinding.rbac.authorization.k8s.io/dockube-controller unchanged
+deployment.apps/dockube-controller unchanged
+deployment "dockube-controller" successfully rolled out
+NAME                 READY   AVAILABLE
+dockube-controller   1       1
+RESULT: PASS - controller available on GKE
+
+[4/6] Controller RBAC boundary
+get pods: yes
+get secrets: no
+RESULT: PASS - required Pod access granted; Secret access denied
+
+[5/6] Docker-like lifecycle end-to-end test
+pod/e2e-lifecycle-<id> condition met
+pod/e2e-lifecycle-<id> condition met
+pod/e2e-lifecycle-<id> condition met
+RESULT: PASS - lifecycle.sh
+
+[6/6] Compose end-to-end test
+client  created or updated
+web     created or updated
+client  created or updated
+web     created or updated
+pod/compose-e2e-client-<id> condition met
+pod/compose-e2e-web-<id> condition met
+client  created or updated
+web     created or updated
+pod/compose-e2e-web-<id> condition met
+pod/compose-e2e-client-<id> condition met
+pod/compose-e2e-web-<id> condition met
+pod/compose-e2e-client-<id> condition met
+pod/compose-e2e-web-<id> condition met
+pod/compose-e2e-client-<id> condition met
+pod/compose-e2e-web-<id> condition met
+RESULT: PASS - compose.sh
+
+Final managed-resource count:
+0
+OVERALL RESULT: PASS

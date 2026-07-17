@@ -23,6 +23,9 @@ func TestPodForUsesRestrictedDefaults(t *testing.T) {
 	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
 		t.Fatal("pod must run as non-root")
 	}
+	if pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != 65532 {
+		t.Fatal("pod volumes must be writable by the non-root workload group")
+	}
 	container := pod.Spec.Containers[0]
 	if container.SecurityContext.AllowPrivilegeEscalation == nil || *container.SecurityContext.AllowPrivilegeEscalation {
 		t.Fatal("privilege escalation must be disabled")

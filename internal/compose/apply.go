@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 )
 
 type Clients struct {
@@ -94,20 +95,29 @@ func applyContainer(ctx context.Context, client dynamic.Interface, namespace, na
 	if existing.GetLabels()[api.ProjectLabel] != spec.Labels[api.ProjectLabel] {
 		return fmt.Errorf("DockerContainer %s is owned by another project", name)
 	}
-	labels := existing.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	labels[api.ManagedByLabel] = api.ManagedByValue
-	for key, value := range spec.Labels {
-		labels[key] = value
-	}
-	existing.SetLabels(labels)
-	if err := api.SetSpec(existing, spec); err != nil {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		current, err := resourceClient.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if current.GetLabels()[api.ProjectLabel] != spec.Labels[api.ProjectLabel] {
+			return fmt.Errorf("DockerContainer %s is owned by another project", name)
+		}
+		labels := current.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[api.ManagedByLabel] = api.ManagedByValue
+		for key, value := range spec.Labels {
+			labels[key] = value
+		}
+		current.SetLabels(labels)
+		if err := api.SetSpec(current, spec); err != nil {
+			return err
+		}
+		_, err = resourceClient.Update(ctx, current, metav1.UpdateOptions{})
 		return err
-	}
-	_, err = resourceClient.Update(ctx, existing, metav1.UpdateOptions{})
-	return err
+	})
 }
 
 func applyConfigMap(ctx context.Context, client kubernetes.Interface, desired *corev1.ConfigMap) error {

@@ -106,8 +106,19 @@ is not implemented.
 
 ## Tested environments
 
-The CLI and controller have currently been tested only on **Minikube**. Other
-Kubernetes distributions and managed Kubernetes services have not yet been
+The CLI and controller have been tested on:
+
+- **Minikube**
+- **GKE Standard**, Kubernetes `v1.35.5-gke.1000000`, on June 21, 2026
+
+The GKE run covered controller deployment and RBAC, Docker-like lifecycle
+commands, logs and exec, restricted Pod security settings, Compose DNS,
+ConfigMaps, Secrets, CSI-backed persistent volumes, idempotent updates,
+stop/start/restart, and cleanup.
+
+See [docs/gke-validation.md](docs/gke-validation.md) for the test procedure,
+sanitized evidence, discovered issues, and GKE deployment requirements. Other
+managed Kubernetes services and Kubernetes versions have not yet been
 validated, so compatibility with them should not be assumed.
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for architecture,

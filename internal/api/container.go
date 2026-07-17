@@ -196,7 +196,7 @@ func PodFor(obj *unstructured.Unstructured, spec ContainerSpec) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			AutomountServiceAccountToken: &falseValue, RestartPolicy: corev1.RestartPolicyNever,
 			TerminationGracePeriodSeconds: &terminationGracePeriod, Volumes: volumes,
-			SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &trueValue, RunAsUser: &runAsUser, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
+			SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &trueValue, RunAsUser: &runAsUser, FSGroup: &runAsUser, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 			Containers: []corev1.Container{{
 				Name: "main", Image: spec.Image, Command: spec.Command, Args: spec.Args, Stdin: spec.Stdin, TTY: spec.TTY,
 				Env: spec.Env, WorkingDir: spec.WorkingDir, Ports: spec.Ports, VolumeMounts: volumeMounts, Resources: spec.Resources,

@@ -10,11 +10,13 @@ import (
 
 	"github.com/hairizuanbinnoorazman/docker-in-k8s/internal/api"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestLoadTranslatesSupportedProjectGolden(t *testing.T) {
@@ -157,6 +159,40 @@ volumes:
 	}
 	if _, err := coreClient.CoreV1().PersistentVolumeClaims("workloads").Get(context.Background(), plan.Volumes[0].ClaimName, metav1.GetOptions{}); err != nil {
 		t.Fatalf("PVC was not retained: %v", err)
+	}
+}
+
+func TestApplyRetriesDockerContainerUpdateConflict(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCompose(t, dir, `name: retryable
+services:
+  app:
+    image: busybox:1.36
+`)
+	plan, err := Load(context.Background(), LoadOptions{Files: []string{path}}, "workloads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamicClient := newDynamicClient()
+	clients := Clients{dynamicClient, kubernetesfake.NewSimpleClientset()}
+	if err := plan.Apply(context.Background(), clients, "workloads"); err != nil {
+		t.Fatal(err)
+	}
+
+	conflicts := 0
+	dynamicClient.PrependReactor("update", "dockercontainers", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if conflicts == 0 {
+			conflicts++
+			return true, nil, apierrors.NewConflict(api.GVR.GroupResource(), plan.Services[0].ContainerName, nil)
+		}
+		return false, nil, nil
+	})
+
+	if err := plan.Apply(context.Background(), clients, "workloads"); err != nil {
+		t.Fatalf("apply did not retry conflict: %v", err)
+	}
+	if conflicts != 1 {
+		t.Fatalf("conflicts = %d, want 1", conflicts)
 	}
 }
 
