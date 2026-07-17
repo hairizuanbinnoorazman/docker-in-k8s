@@ -63,6 +63,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.SetErr(opts.errOut)
 	cmd.PersistentFlags().StringVar(&opts.namespace, "namespace", os.Getenv("DOCKUBE_NAMESPACE"), "Kubernetes workload namespace")
 	cmd.AddCommand(
+		newBuildCommand(opts),
 		newRunCommand(opts),
 		newPSCommand(opts),
 		newRMCommand(opts),

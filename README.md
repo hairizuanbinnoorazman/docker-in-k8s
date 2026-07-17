@@ -100,7 +100,7 @@ is not implemented.
 | `docker compose ps`, `logs` | Available | Lists project workloads and reads current Pod logs. `logs -f` is best used with one service. |
 | `docker compose stop`, `start`, `restart` | Available | Operates on every service in the project. Replacement Pods receive new UIDs and IPs. |
 | `docker compose down` | Available | Removes workloads, Services, and generated ConfigMaps. PVCs are retained unless `--volumes` is supplied. |
-| `docker build` / BuildKit | Not available | Image builds are outside the current implementation. |
+| `docker build -t REGISTRY/IMAGE PATH` | Partial | Runs rootless BuildKit in a short-lived Kubernetes Job and always pushes to the named registry. Contexts are limited to 700 KiB compressed; `.git` is excluded, but `.dockerignore`, build args, secrets, cache controls, and multi-platform output are not yet implemented. |
 | Docker Engine API and socket clients | Not available | There is intentionally no Docker socket or Docker Engine API compatibility. |
 | Host bind mounts, privileged mode, host namespaces, and devices | Not available | Intentionally excluded from the security model. |
 
@@ -153,3 +153,55 @@ The identity running the Compose CLI additionally needs namespace-scoped access
 to `services`, `configmaps`, and `persistentvolumeclaims`, and `get` access to
 referenced `secrets`. The controller itself does not need Secret access: Pods
 reference Secrets directly and kubelet performs the mount.
+
+## Building images on Minikube
+
+By default, the development install creates a private registry in a separate
+Pod, backed by a 2 GiB PVC. It is available inside the cluster as
+`dockube-registry.dockube-system.svc:5000` and on each node at port `30500`.
+BuildKit runs only for the duration of each build; no Docker or
+container-runtime socket is mounted.
+
+The bundled registry is controlled by `DOCKUBE_BUNDLED_REGISTRY` and defaults
+to `true`:
+
+```console
+# Default: install the registry Deployment, Service, and PVC.
+make install
+
+# Use an externally managed registry instead.
+make install DOCKUBE_BUNDLED_REGISTRY=false
+```
+
+Disabling the bundled registry does not configure or validate an external
+registry. Pass that registry in the build tag, and separately configure its
+TLS credentials or node-runtime trust as required. `make uninstall-registry`
+removes the bundled registry and its PVC, including all stored images.
+
+Minikube's container runtime must trust the development registry's plain HTTP
+endpoint. For a fresh profile, start Minikube once to establish its node IP,
+then restart it with that exact registry endpoint:
+
+```console
+minikube start
+REGISTRY="$(minikube ip):30500"
+minikube stop
+minikube start --insecure-registry="$REGISTRY"
+make deploy-dev
+make build
+
+./bin/dockube --namespace dockube-workloads build -t "$REGISTRY/dockube-example:dev" .
+./bin/dockube --namespace dockube-workloads run -d --name built-example "$REGISTRY/dockube-example:dev"
+```
+
+The identity invoking `build` needs permission to create/get/delete Jobs,
+create/delete ConfigMaps, list Pods, and get `pods/log` in `dockube-system`.
+Rootless BuildKit needs an unconfined seccomp/AppArmor profile and its setuid
+UID-mapping helper, so the build namespace cannot enforce the restricted Pod
+Security profile. The build Pod still runs its main process as UID 1000, mounts
+no host paths, and receives no Kubernetes service-account token.
+
+This initial build transport stores the compressed context in a temporary
+ConfigMap, so it is intended for small development builds and must not be used
+for contexts containing secrets. The context ConfigMap and Job are removed
+after the build unless `--keep-build` is specified.

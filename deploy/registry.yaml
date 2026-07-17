@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dockube-registry
+  namespace: dockube-system
+  labels:
+    app.kubernetes.io/name: dockube-registry
+    app.kubernetes.io/managed-by: dockube
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dockube-registry
+  namespace: dockube-system
+  labels:
+    app.kubernetes.io/name: dockube-registry
+    app.kubernetes.io/managed-by: dockube
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dockube-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dockube-registry
+        app.kubernetes.io/managed-by: dockube
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: registry
+          image: registry:2.8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: registry
+              containerPort: 5000
+          env:
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/registry
+          readinessProbe:
+            httpGet:
+              path: /v2/
+              port: registry
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dockube-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dockube-registry
+  namespace: dockube-system
+  labels:
+    app.kubernetes.io/name: dockube-registry
+    app.kubernetes.io/managed-by: dockube
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: dockube-registry
+  ports:
+    - name: registry
+      port: 5000
+      targetPort: registry
+      nodePort: 30500
