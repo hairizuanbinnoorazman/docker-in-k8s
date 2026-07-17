@@ -29,6 +29,18 @@ test-e2e: build
 	bash test/e2e/lifecycle.sh
 	bash test/e2e/compose.sh
 	bash test/e2e/build.sh
+	bash test/e2e/build-registry-security.sh
+	bash test/e2e/build-diagnostics.sh
+	bash test/e2e/build-cache.sh
+	bash test/e2e/build-secret.sh
+	bash test/e2e/build-ssh.sh
+	bash test/e2e/build-results.sh
+	bash test/e2e/build-multiplatform.sh
+	bash test/e2e/build-network.sh
+	bash test/e2e/build-contexts.sh
+	bash test/e2e/build-outputs.sh
+	bash test/e2e/build-advanced.sh
+	bash test/e2e/build-cleanup.sh
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -type f)

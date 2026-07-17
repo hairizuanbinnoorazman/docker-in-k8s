@@ -100,9 +100,71 @@ is not implemented.
 | `docker compose ps`, `logs` | Available | Lists project workloads and reads current Pod logs. `logs -f` is best used with one service. |
 | `docker compose stop`, `start`, `restart` | Available | Operates on every service in the project. Replacement Pods receive new UIDs and IPs. |
 | `docker compose down` | Available | Removes workloads, Services, and generated ConfigMaps. PVCs are retained unless `--volumes` is supplied. |
-| `docker build -t REGISTRY/IMAGE PATH` | Partial | Runs rootless BuildKit in a short-lived Kubernetes Job and always pushes to the named registry. Contexts are limited to 700 KiB compressed; `.git` is excluded, but `.dockerignore`, build args, secrets, cache controls, and multi-platform output are not yet implemented. |
+| `docker build [OPTIONS] PATH` | Partial | Streams filtered local, tar, stdin, Git, HTTPS, and named contexts into a short-lived rootless BuildKit Kubernetes Job. Supports registry/OCI/Docker/tar/local outputs, multiple tags and outputs, common Dockerfile/cache controls, multi-platform manifests, tmpfs secrets and SSH keys, annotations and attestations, frontend calls, result metadata, network isolation, and redacted debug diagnostics. Docker Engine loading, privileged/host controls, interactive progress, binary stdout output, and several cloud cache backends remain intentionally unavailable. |
 | Docker Engine API and socket clients | Not available | There is intentionally no Docker socket or Docker Engine API compatibility. |
 | Host bind mounts, privileged mode, host namespaces, and devices | Not available | Intentionally excluded from the security model. |
+
+Build flags that require host privileges or a Docker Engine are rejected with a
+specific error. `--network=host`, every `--allow` entitlement (including
+`security.insecure`, `network.host`, and devices), `--cgroup-parent`, and
+`--add-host=host:host-gateway` conflict with the socketless Kubernetes security
+model. `--load` has no destination because dockube has no Docker image store.
+Only the built-in/default builder is currently selectable; `--policy` is
+reserved until an administrator-controlled policy design exists. Windows and
+legacy-builder flags `--isolation`, `--security-opt`, and `--squash` are out of
+scope. Build Job CPU, memory, and ephemeral-storage limits are
+administrator-defined, so `--resource` is rejected; node/runtime process limits
+cannot safely be changed per build, so `--ulimit` is also rejected. BuildKit's
+per-`RUN` shared memory can be set with `--shm-size`. None of these options is
+silently ignored.
+
+Cache import supports the registry backend. Cache export supports registry and
+inline backends. Local, GitHub Actions, S3, Azure Blob, and other cache types
+are rejected because dockube has not defined their credential exposure, data
+retention, or cross-tenant isolation behavior.
+
+Build contexts may be local directories or uncompressed/gzip-compressed tar
+archives. A `-f/--file` supplied explicitly is resolved from the client working
+directory and may be outside the context; dockube injects it under a controlled
+name without adding neighboring files. Archive extraction rejects traversal,
+devices, FIFOs, and other special entries and is capped at 2 GiB.
+`PATH=-` accepts a tar archive from stdin, while `-f -` reads a Dockerfile of up
+to 16 MiB from stdin for a non-stdin context. The two inputs cannot share stdin.
+Remote contexts support verified-HTTPS tar archives and UTF-8 text Dockerfiles,
+and Git contexts support `git+https://`, HTTPS URLs ending in `.git`, and local
+`file://` repositories. Remote Dockerfiles are also accepted over verified
+HTTPS. Network inputs reject URL credentials and plain HTTP, follow at most five
+verified-HTTPS redirects, allow at most 2 GiB for a context and 16 MiB for a
+Dockerfile, and are downloaded on the client before filtered streaming to the
+cluster. HTTPS trust follows the client's system trust configuration.
+Repeatable `--build-context NAME=PATH_OR_URL` inputs use the same filtering and
+remote-input policy and are streamed into separate private directories for
+Dockerfile named-context references.
+
+Repeatable `-o/--output` accepts `registry`, `oci`, `docker`, `tar`, and `local`
+exporters. Registry outputs are pushed; the other types are streamed from the
+BuildKit Pod to an atomic client file or a newly created local directory. Local
+directory extraction rejects traversal, links, devices, and other special
+entries. Non-registry outputs do not require a tag or `--push`. Binary stdout
+(`dest=-`) remains rejected until progress and result streams are separated.
+
+Files selected as `--secret` or private-key `--ssh` sources are automatically
+excluded from the primary context archive when they reside below the context,
+even without an ignore rule. Other sensitive local files remain subject to
+normal Docker context semantics and must be listed in `.dockerignore`.
+
+Image outputs accept repeatable `--annotation` values, including manifest/index
+and platform qualifiers. `--attest` supports BuildKit provenance and SBOM
+attestations, with `--provenance` and `--sbom` shorthands. Dockerfile frontend
+subrequests are available through `--call=check|outline|targets`; `--check` is
+the check shorthand. These run in the same constrained rootless BuildKit Job.
+`--debug` emits only scoped lifecycle metadata (generated Job/namespace,
+BuildKit pin, feature counts, cleanup policy, and whether a timeout is enabled).
+It deliberately omits tags, paths, argument values, secret identifiers and
+values, SSH identifiers and keys, and registry credential details.
+Interactive/TTY progress is intentionally unavailable; `--progress=tty` is
+rejected. Plain and raw-JSON log streams report interruption or missing-log
+errors, while an actual Job failure retains precedence as the root cause.
 
 ## Tested environments
 
@@ -123,11 +185,17 @@ validated, so compatibility with them should not be assumed.
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for architecture,
 compatibility boundaries, security constraints, and the remaining task list.
+See [docs/build-operations.md](docs/build-operations.md) for build-namespace
+RBAC, Pod Security exceptions, quota sizing, network policy, registry
+credentials, cache isolation, and retention requirements.
 
 ## Compose compatibility
 
 `dockube compose` uses `github.com/compose-spec/compose-go/v2` and validates the
 whole normalized project before creating or updating Kubernetes resources.
+Compose services must reference prebuilt `image:` values. `build:` is rejected
+explicitly and remains a separate follow-up project; `dockube build` is not
+implicitly invoked by `compose up`.
 Project names, ownership labels, workload names, Services, ConfigMaps, and PVCs
 are deterministic. Repeated `compose up -d` calls update existing resources and
 remove stale project workloads without creating duplicates.
@@ -159,7 +227,8 @@ reference Secrets directly and kubelet performs the mount.
 By default, the development install creates a private registry in a separate
 Pod, backed by a 2 GiB PVC. It is available inside the cluster as
 `dockube-registry.dockube-system.svc:5000` and on each node at port `30500`.
-BuildKit runs only for the duration of each build; no Docker or
+BuildKit `v0.30.0-rootless` runs with CPU, memory, and ephemeral-storage
+requests and limits only for the duration of each build; no Docker or
 container-runtime socket is mounted.
 
 The bundled registry is controlled by `DOCKUBE_BUNDLED_REGISTRY` and defaults
@@ -190,18 +259,43 @@ minikube start --insecure-registry="$REGISTRY"
 make deploy-dev
 make build
 
-./bin/dockube --namespace dockube-workloads build -t "$REGISTRY/dockube-example:dev" .
+./bin/dockube --namespace dockube-workloads build --push --registry-insecure -t "$REGISTRY/dockube-example:dev" .
 ./bin/dockube --namespace dockube-workloads run -d --name built-example "$REGISTRY/dockube-example:dev"
 ```
 
-The identity invoking `build` needs permission to create/get/delete Jobs,
-create/delete ConfigMaps, list Pods, and get `pods/log` in `dockube-system`.
+The identity invoking `build` needs permission to create/get/delete Jobs, list
+Pods, list Events, create `pods/exec` sessions, and get `pods/log` in
+`dockube-system`. Events are used to report admission, scheduling, mount, and
+image-pull failures without waiting for the overall build timeout.
 Rootless BuildKit needs an unconfined seccomp/AppArmor profile and its setuid
 UID-mapping helper, so the build namespace cannot enforce the restricted Pod
 Security profile. The build Pod still runs its main process as UID 1000, mounts
 no host paths, and receives no Kubernetes service-account token.
 
-This initial build transport stores the compressed context in a temporary
-ConfigMap, so it is intended for small development builds and must not be used
-for contexts containing secrets. The context ConfigMap and Job are removed
-after the build unless `--keep-build` is specified.
+The filtered context is gzip-compressed and streamed directly into an `emptyDir`
+mounted by the BuildKit Pod; it is not stored in a ConfigMap or Kubernetes etcd.
+Add local secrets to `.dockerignore` so they are removed before upload, and do
+not use context files to pass build secrets. The Job and its ephemeral context
+are removed after the build unless `--keep-build` is specified.
+
+Verified TLS is the default for external registries. Use
+`--registry-secret NAME` to mount a `kubernetes.io/dockerconfigjson` Secret as
+the BuildKit Docker configuration, and `--registry-ca-secret NAME` to mount a
+Secret whose `ca.crt` key contains a private registry CA. Credential and CA
+values are mounted directly into the build Pod and are not copied into Job
+arguments, environment values, ConfigMaps, events, or build logs. The bundled
+development registry uses plain HTTP and therefore requires the explicit
+`--registry-insecure` flag shown above.
+
+Build secrets supplied with `--secret` and SSH private keys supplied with
+`--ssh ID=PATH` are streamed separately into a memory-backed volume after the
+context upload. Their values and local paths are not placed in the context, Job
+arguments, Pod environment, ConfigMaps, or logs. SSH agent sockets are not yet
+forwarded; pass a private-key file explicitly.
+
+Repeat `--platform` or pass a comma-separated list to push a multi-platform
+manifest. Dockerfiles that only select or copy platform-specific content do not
+need CPU emulation. A `RUN` instruction for a non-native architecture requires
+the cluster node to have a matching `binfmt_misc` emulator; dockube does not
+install host-level emulators and BuildKit will fail the affected platform when
+one is unavailable.
